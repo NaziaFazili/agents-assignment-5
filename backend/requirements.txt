@@ -1,0 +1,39 @@
+# LangGraph and LangChain
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-google-genai>=2.0.0
+langchain-core>=0.3.0
+
+# LangSmith
+langsmith>=0.2.0
+
+# CopilotKit + AG-UI (tested with the frontend's @copilotkit/* 1.78.0, which
+# still resumes interrupts via forwardedProps.command.resume; ag-ui-langgraph
+# 0.0.47 already marks that path deprecated)
+copilotkit==0.1.96
+ag-ui-langgraph==0.0.47
+
+# FastAPI
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# Data validation
+pydantic>=2.0.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Database / Checkpointing
+aiosqlite>=0.20.0
+langgraph-checkpoint-sqlite>=2.0.0
+
+# Evaluation
+# ragas imports langchain_community.chat_models.vertexai, which
+# langchain-community 0.4.2 removed: keep community below 0.4.2.
+ragas==0.4.3
+langchain-community>=0.4,<0.4.2
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.24.0

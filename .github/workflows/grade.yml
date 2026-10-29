@@ -1,0 +1,36 @@
+name: Autograding
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    if: ${{ vars.GRADING_ENABLED == 'true' }}
+    steps:
+      - name: Checkout student code
+        uses: actions/checkout@v4
+
+      - name: Fetch grader
+        uses: actions/checkout@v4
+        with:
+          repository: Vyoma/agent-course-graders
+          path: .grader
+          token: ${{ secrets.GRADER_PAT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install pytest
+
+      # Scores go to Canvas only. This step keeps the report on the runner:
+      # no score in the log, step summary or artifacts, since those are public.
+      - name: Run grader
+        run: python .grader/assignment5/grader.py --output grade_report.json > /dev/null
