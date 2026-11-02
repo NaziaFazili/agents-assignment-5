@@ -15,7 +15,7 @@ def create_risk_accuracy_evaluator():
     """
     Create an evaluator that checks risk assessment accuracy.
 
-    TODO (10 points):
+
     - Return a callable (function) that takes two arguments:
         - inputs: dict with "amount", "department", "description"
         - outputs: dict with "risk_level"
@@ -37,14 +37,36 @@ def create_risk_accuracy_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError("TODO: Implement create_risk_accuracy_evaluator (10 points)")
+
+    def evaluate(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        actual = outputs.get("risk_level")
+        expected = reference_outputs.get("risk_level")
+
+        risk_levels = ["low", "medium", "high", "critical"]
+
+        # Exact match, including None == None
+        if actual == expected:
+            return {"score": 1.0}
+
+        # Handle None or invalid risk levels
+        if actual not in risk_levels or expected not in risk_levels:
+            return {"score": 0.0}
+
+        # Adjacent risk levels
+        if abs(risk_levels.index(actual) - risk_levels.index(expected)) == 1:
+            return {"score": 0.5}
+
+        return {"score": 0.0}
+
+    return evaluate
 
 
 def create_approval_consistency_evaluator():
     """
     Create an evaluator that checks approval decision consistency.
 
-    TODO (10 points):
+
     - Return a callable that takes:
         - inputs: dict with "amount", "department"
         - outputs: dict with "status" (approved/rejected)
@@ -57,4 +79,15 @@ def create_approval_consistency_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError("TODO: Implement create_approval_consistency_evaluator (10 points)")
+
+    def evaluate(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        actual = outputs.get("status")
+        expected = reference_outputs.get("status")
+
+        if actual == expected:
+            return {"score": 1.0}
+
+        return {"score": 0.0}
+
+    return evaluate

@@ -22,7 +22,7 @@ def sanitize_output(text: str) -> str:
     """
     Remove PII and sensitive information from output text.
 
-    TODO (5 points):
+
     - For each pattern in PII_PATTERNS:
       - "ssn": replace matches with "***-**-XXXX" (preserve nothing)
       - "credit_card": replace matches with "****-****-****-XXXX"
@@ -36,14 +36,19 @@ def sanitize_output(text: str) -> str:
     Returns:
         Sanitized text with PII masked
     """
-    raise NotImplementedError("TODO: Implement sanitize_output (5 points)")
+    text = re.sub(PII_PATTERNS["ssn"], "***-**-XXXX", text)
+    text = re.sub(PII_PATTERNS["credit_card"], "****-****-****-XXXX", text)
+    text = re.sub(PII_PATTERNS["email"], "[EMAIL REDACTED]", text)
+    text = re.sub(PII_PATTERNS["phone"], "***-***-XXXX", text)
+
+    return text
 
 
 def mask_financial_details(text: str) -> str:
-    r"""
+    """
     Mask specific financial details in output while preserving context.
 
-    TODO (5 points):
+
     - Find dollar amounts matching pattern $X,XXX.XX or $XXXXX.XX
     - Replace with masked version showing only last 3 digits: $***XX.XX
     - Find account numbers (8+ consecutive digits) and mask all but last 4
@@ -60,4 +65,19 @@ def mask_financial_details(text: str) -> str:
     Returns:
         Text with financial details masked
     """
-    raise NotImplementedError("TODO: Implement mask_financial_details (5 points)")
+
+    # Mask dollar amounts
+    def mask_amount(match):
+        amount = match.group()
+        return "$***" + amount[-5:]
+
+    text = re.sub(r"\$[\d,]+\.\d{2}", mask_amount, text)
+
+    # Mask account numbers
+    def mask_account(match):
+        account = match.group()
+        return "*" * (len(account) - 4) + account[-4:]
+
+    text = re.sub(r"\b\d{8,}\b", mask_account, text)
+
+    return text

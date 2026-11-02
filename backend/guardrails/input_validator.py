@@ -11,10 +11,21 @@ from backend.config import BUDGET_CEILING, VALID_DEPARTMENTS
 
 # --- GIVEN: Blocked patterns for SQL injection detection ---
 BLOCKED_PATTERNS = [
-    "drop table", "delete from", "insert into", "update set",
-    "union select", "' or '1'='1", "'; --", "<script>",
-    "javascript:", "onclick=", "onerror=", "eval(",
-    "__import__", "os.system", "subprocess",
+    "drop table",
+    "delete from",
+    "insert into",
+    "update set",
+    "union select",
+    "' or '1'='1",
+    "'; --",
+    "<script>",
+    "javascript:",
+    "onclick=",
+    "onerror=",
+    "eval(",
+    "__import__",
+    "os.system",
+    "subprocess",
 ]
 
 # --- GIVEN: Maximum field lengths ---
@@ -33,7 +44,6 @@ def validate_request(
     """
     Validate a financial request against safety rules.
 
-    TODO (5 points):
     - Reject if amount <= 0 (message: "Amount must be positive")
     - Reject if amount > BUDGET_CEILING (message: "Amount exceeds budget ceiling of ${BUDGET_CEILING:,.2f}")
     - Reject if department not in VALID_DEPARTMENTS (message: "Invalid department: {department}")
@@ -52,14 +62,35 @@ def validate_request(
     Returns:
         Tuple of (is_valid, message)
     """
-    raise NotImplementedError("TODO: Implement validate_request (5 points)")
+    # Validate amount
+    is_valid, message = validate_amount(amount)
+
+    if not is_valid:
+        return (False, message)
+
+    # Validate department
+    if department not in VALID_DEPARTMENTS:
+        return (False, f"Invalid department: {department}")
+
+    # Validate title length
+    if len(title) > MAX_TITLE_LENGTH:
+        return (False, "Title too long")
+
+    # Validate text fields
+    for text in [title, description, justification]:
+        is_valid, message = sanitize_text(text)
+
+        if not is_valid:
+            return (False, message)
+
+    return (True, "Request validated successfully")
 
 
 def validate_amount(amount: float) -> tuple[bool, str]:
     """
     Validate the requested amount.
 
-    TODO (2 points):
+
     - Return (False, "Amount must be positive") if amount <= 0
     - Return (False, "Amount exceeds budget ceiling of ${BUDGET_CEILING:,.2f}") if amount > BUDGET_CEILING
     - Return (True, "Amount is valid") otherwise
@@ -70,14 +101,19 @@ def validate_amount(amount: float) -> tuple[bool, str]:
     Returns:
         Tuple of (is_valid, message)
     """
-    raise NotImplementedError("TODO: Implement validate_amount (2 points)")
+    if amount <= 0:
+        return False, "Amount must be positive"
+
+    if amount > BUDGET_CEILING:
+        return (False, f"Amount exceeds budget ceiling of ${BUDGET_CEILING:,.2f}")
+
+    return (True, "Amount is valid")
 
 
 def sanitize_text(text: str, field_name: str = "text") -> tuple[bool, str]:
     """
     Check text for injection attacks and malicious content.
 
-    TODO (3 points):
     - Convert text to lowercase for comparison
     - Check if any BLOCKED_PATTERNS appear in the lowercased text
     - If found, return (False, "Blocked content detected in {field_name}: suspicious pattern")
@@ -90,4 +126,13 @@ def sanitize_text(text: str, field_name: str = "text") -> tuple[bool, str]:
     Returns:
         Tuple of (is_safe, original_text_or_error_message)
     """
-    raise NotImplementedError("TODO: Implement sanitize_text (3 points)")
+    text_lower = text.lower()
+
+    for pattern in BLOCKED_PATTERNS:
+        if pattern.lower() in text_lower:
+            return (
+                False,
+                f"Blocked content detected in {field_name}: suspicious pattern",
+            )
+
+    return (True, text)

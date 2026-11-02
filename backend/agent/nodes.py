@@ -9,29 +9,29 @@ Part 1: LangGraph Workflow + Interrupts (35 points)
 
 import json
 
-from langchain_core.messages import HumanMessage, AIMessage
-from langgraph.types import interrupt, Command
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.types import Command, interrupt
+
 from backend.agent.state import ApprovalState
 from backend.config import (
-    get_llm,
     BUDGET_CEILING,
     DEPARTMENT_BUDGETS,
     HIGH_RISK_THRESHOLD,
     MEDIUM_RISK_THRESHOLD,
+    get_llm,
 )
 from backend.guardrails.input_validator import validate_request
 from backend.guardrails.output_filter import sanitize_output
-
 
 # ============================================================
 # NODE FUNCTIONS (8 total)
 # ============================================================
 
+
 def submit_request(state: ApprovalState) -> dict:
     """
     Node 1: Receive and validate the financial request.
 
-    TODO (3 points):
     - Extract request details from state
     - Call validate_request() to check the request
     - If invalid, set status to "rejected" and return with validation_message
@@ -51,14 +51,64 @@ def submit_request(state: ApprovalState) -> dict:
       critical requests skip validate_budget, and the Approval Panel shows "Not checked"
       only when department_budget is None (0 shows "$0, Within budget")
     """
-    raise NotImplementedError("TODO: Implement submit_request node (3 points)")
+
+    # Extract request details from state
+    request_id = state.get("request_id", "")
+    title = state.get("title", "Untitled Request")
+    description = state.get("description", "No description")
+    amount = state.get("amount", 0)
+    department = state.get("department", "unknown")
+    justification = state.get("justification", "No justification")
+
+    # Validate the request
+    # is_valid, validation_message = validate_request(state)
+    is_valid, validation_message = validate_request(
+        amount,
+        department,
+        title,
+        description,
+        justification,
+    )
+
+    #  is_valid, validation_message, current_stage, status, messages
+    return {
+        # Validation results
+        "is_valid": is_valid,
+        "validation_message": validation_message,
+        # Workflow status If valid, set current_stage to "risk_assessment" and status to "pending"
+        # If invalid, set status to "rejected" and return with validation_message
+        "current_stage": "risk_assessment" if is_valid else "validation",
+        "status": "pending" if is_valid else "rejected",
+        # Conversation message
+        "messages": [
+            AIMessage(
+                content=(
+                    f"Request {request_id} submitted successfully."
+                    if is_valid
+                    else f"Request rejected: {validation_message}"
+                )
+            )
+        ],
+        # Reset previous request's state
+        "risk_level": None,
+        "risk_reasoning": "",
+        "manager_approved": None,
+        "manager_comments": "",
+        "finance_approved": None,
+        "finance_comments": "",
+        "final_approved": None,
+        "final_comments": "",
+        "department_budget": None,
+        "budget_remaining": None,
+        "within_budget": None,
+        "decisions": [],
+    }
 
 
 def assess_risk(state: ApprovalState) -> dict:
     """
     Node 2: Use LLM to assess risk level of the request.
 
-    TODO (3 points):
     - Create a prompt asking the LLM to assess risk as "low", "medium", "high", or "critical"
     - Include the request title, description, amount, department, justification, and priority
       (the "urgent" rule below needs priority)
@@ -84,14 +134,75 @@ def assess_risk(state: ApprovalState) -> dict:
     - Low risk → budget validation (auto-approve path)
     - Medium/High/Critical → manager review
     """
-    raise NotImplementedError("TODO: Implement assess_risk node (3 points)")
+    title = state.get("title", "")
+    description = state.get("description", "")
+    amount = state.get("amount", 0)
+    department = state.get("department", "")
+    justification = state.get("justification", "")
+    priority = state.get("priority", "")
+
+    # Build risk assessment prompt
+    prompt = f"""
+    You are a financial risk assessment assistant.
+
+    Assess the risk level of the following financial request.
+
+    Request Details:
+    - Title: {title}
+    - Description: {description}
+    - Amount: ${amount}
+    - Department: {department}
+    - Justification: {justification}
+    - Priority: {priority}
+
+    Risk Classification Rules:
+    1. Amount <= $10,000: low
+    2. Amount > $10,000 and <= $50,000: medium
+    3. Amount > $50,000 and <= $100,000: high
+    4. Priority is "urgent" and amount > $50,000: critical
+
+    Apply the urgent priority rule first.
+
+    Return ONLY valid JSON in this format:
+    {{
+        "risk_level": "low",
+        "risk_reasoning": "Explanation of the risk assessment"
+    }}
+
+    The risk_level must be one of: low, medium, high, critical.
+    
+    """
+    response = get_llm().invoke([HumanMessage(content=prompt)])
+
+    # Default values
+    risk_level = "medium"
+    risk_reasoning = "Unable to determine risk level from LLM response."
+
+    try:
+        result = json.loads(response.text.strip())
+        risk_level = result.get("risk_level", "medium")
+        risk_reasoning = result.get("risk_reasoning", "")
+
+        if risk_level not in ["low", "medium", "high", "critical"]:
+            risk_level = "medium"
+    except (json.JSONDecodeError, TypeError, ValueError):
+        risk_level = "medium"
+        risk_reasoning = "Unable to parse LLM risk assessment."
+
+    return {
+        "risk_level": risk_level,
+        "risk_reasoning": risk_reasoning,
+        "messages": [
+            AIMessage(content=f"Risk Level: {risk_level}\nReasoning: {risk_reasoning}")
+        ],
+    }
 
 
 def manager_review(state: ApprovalState) -> dict:
     """
     Node 3: Manager review with human-in-the-loop interrupt.
 
-    TODO (3 points):
+
     - Call interrupt() with a dict containing request details for the manager:
       {"type": "manager_review", "request_id": ..., "title": ..., "amount": ...,
        "department": ..., "risk_level": ..., "risk_reasoning": ...}
@@ -114,14 +225,57 @@ def manager_review(state: ApprovalState) -> dict:
       overwrites the earlier decisions (same for finance_review and final_signoff)
     - The route_after_manager router decides the next step based on approval + risk_level
     """
-    raise NotImplementedError("TODO: Implement manager_review node (3 points)")
+    # Pause workflow and request manager approval
+    decision = interrupt(
+        {
+            "type": "manager_review",
+            "request_id": state.get("request_id"),
+            "title": state.get("title", ""),
+            "amount": state.get("amount"),
+            "department": state.get("department", ""),
+            "risk_level": state.get("risk_level"),
+            "risk_reasoning": state.get("risk_reasoning"),
+        }
+    )
+
+    # Frontend may return the decision as a JSON string
+    if isinstance(decision, str):
+        decision = json.loads(decision)
+
+    # Extract manager's decision
+    approved = decision.get("approved", False)
+    comments = decision.get("comments", "")
+
+    decision_status = "approved" if approved else "rejected"
+
+    # Create audit trail entry
+    entry = {
+        "stage": "manager_review",
+        "approved": approved,
+        "decision": decision_status,
+        "reviewer": "Manager",
+        "comments": comments,
+        "reasoning": comments or f"Manager {decision_status} the request.",
+    }
+
+    # Return updated state fields
+    return {
+        "manager_approved": approved,
+        "manager_comments": comments,
+        "decisions": state.get("decisions", []) + [entry],
+        "messages": [
+            AIMessage(
+                content=f"Manager {decision_status} the request. Comments: {comments}"
+            )
+        ],
+    }
 
 
 def validate_budget(state: ApprovalState) -> dict:
     """
     Node 4: Validate request against department budget.
 
-    TODO (1 point):
+
     - Look up the department's budget from DEPARTMENT_BUDGETS
     - Check if the requested amount is within budget
     - Set department_budget, budget_remaining, and within_budget
@@ -137,14 +291,38 @@ def validate_budget(state: ApprovalState) -> dict:
       - Over budget + low risk → escalate to manager_review
       - Over budget + medium risk → escalate to finance_review
     """
-    raise NotImplementedError("TODO: Implement validate_budget node (1 point)")
+    # Get request details for department and amount
+    department = state.get("department", "")
+    amount = state.get("amount", 0)
+
+    # Look up department budget
+    budget = DEPARTMENT_BUDGETS.get(department, 0)
+
+    # Validate budget
+    within_budget = amount <= budget
+    budget_remaining = budget - amount
+
+    # Create validation message
+    if within_budget:
+        message = (
+            f"Budget validation passed. Remaining budget: ${budget_remaining:,.2f}"
+        )
+    else:
+        message = f"Budget validation failed. Request exceeds the budget by ${abs(budget_remaining):,.2f}"
+
+    # Return updated state fields
+    return {
+        "department_budget": budget,
+        "budget_remaining": budget_remaining,
+        "within_budget": within_budget,
+        "messages": [AIMessage(content=message)],
+    }
 
 
 def finance_review(state: ApprovalState) -> dict:
     """
     Node 5: Finance team review with human-in-the-loop interrupt.
 
-    TODO (3 points):
     - Call interrupt() with a dict for finance review:
       {"type": "finance_review", "request_id": ..., "title": ..., "amount": ...,
        "department": ..., "risk_level": ..., "within_budget": ...,
@@ -161,14 +339,60 @@ def finance_review(state: ApprovalState) -> dict:
       - Approved + critical risk → final_signoff (one more review)
       - Approved + medium risk (over-budget escalation) → process_request
     """
-    raise NotImplementedError("TODO: Implement finance_review node (3 points)")
+    # Pause workflow for finance team review
+    decision = interrupt(
+        {
+            "type": "finance_review",
+            "request_id": state.get("request_id"),
+            "title": state.get("title"),
+            "amount": state.get("amount"),
+            "department": state.get("department"),
+            "risk_level": state.get("risk_level"),
+            "within_budget": state.get("within_budget"),
+            "department_budget": state.get("department_budget"),
+            "budget_remaining": state.get("budget_remaining"),
+            "manager_comments": state.get("manager_comments"),
+        }
+    )
+
+    # Convert JSON string to dictionary
+    if isinstance(decision, str):
+        decision = json.loads(decision)
+
+    # Extract finance team's decision
+    approved = decision.get("approved", False)
+    comments = decision.get("comments", "")
+
+    decision_status = "approved" if approved else "rejected"
+
+    # Create audit trail entry
+    entry = {
+        "stage": "finance_review",
+        "approved": approved,
+        "decision": decision_status,
+        "reviewer": "Finance",
+        "comments": comments,
+        "reasoning": comments or f"Finance {decision_status} the request.",
+    }
+
+    # Return updated state fields
+    return {
+        "finance_approved": approved,
+        "finance_comments": comments,
+        "decisions": state.get("decisions", []) + [entry],
+        "messages": [
+            AIMessage(
+                content=f"Finance {decision_status} the request. Comments: {comments}"
+            )
+        ],
+    }
 
 
 def final_signoff(state: ApprovalState) -> dict:
     """
     Node 6: Executive final sign-off with human-in-the-loop interrupt.
 
-    TODO (3 points):
+
     - Call interrupt() with a dict summarizing the full approval chain:
       {"type": "final_signoff", "request_id": ..., "title": ..., "amount": ...,
        "department": ..., "risk_level": ..., "manager_approved": ...,
@@ -179,14 +403,58 @@ def final_signoff(state: ApprovalState) -> dict:
     - Add an AIMessage with final decision
     - Return updated state fields
     """
-    raise NotImplementedError("TODO: Implement final_signoff node (3 points)")
+
+    # Pause workflow for executive approval
+    decision = interrupt(
+        {
+            "type": "final_signoff",
+            "request_id": state.get("request_id"),
+            "title": state.get("title"),
+            "amount": state.get("amount"),
+            "department": state.get("department"),
+            "risk_level": state.get("risk_level"),
+            "manager_approved": state.get("manager_approved"),
+            "finance_approved": state.get("finance_approved"),
+            "within_budget": state.get("within_budget"),
+            "decisions": state.get("decisions", []),
+        }
+    )
+
+    if isinstance(decision, str):
+        decision = json.loads(decision)
+
+    # Extract executive decision
+    approved = decision.get("approved", False)
+    comments = decision.get("comments", "")
+
+    decision_status = "approved" if approved else "rejected"
+
+    entry = {
+        "stage": "final_signoff",
+        "approved": approved,
+        "decision": decision_status,
+        "reviewer": "Executive",
+        "comments": comments,
+        "reasoning": comments or f"Executive {decision_status} the request.",
+    }
+
+    return {
+        "final_approved": approved,
+        "final_comments": comments,
+        "current_stage": "processing" if approved else "rejection",
+        "decisions": state.get("decisions", []) + [entry],
+        "messages": [
+            AIMessage(
+                content=f"Executive {decision_status} the request. Comments: {comments}"
+            )
+        ],
+    }
 
 
 def process_request(state: ApprovalState) -> dict:
     """
     Node 7: Process the fully-approved request.
 
-    TODO (1 point):
     - Set status to "approved"
     - Set current_stage to "complete"
     - Create a summary message listing all approval stages and comments
@@ -196,14 +464,35 @@ def process_request(state: ApprovalState) -> dict:
     Hints:
     - sanitize_output() filters PII from the output text
     """
-    raise NotImplementedError("TODO: Implement process_request node (1 point)")
+
+    summary = (
+        f"Request {state.get('request_id')} has been approved.\n"
+        f"Request ID: {state.get('request_id')}\n"
+        f"Title: {state.get('title')}\n"
+        f"Amount: ${state.get('amount', 0):,.2f}\n"
+    )
+
+    # Add approval history
+    for entry in state.get("decisions", []):
+        summary += (
+            f"{entry.get('reviewer')}: {entry.get('decision')}  "
+            f"{entry.get('comments', '')}\n"
+        )
+
+    # Sanitize summary to remove PII
+    summary = sanitize_output(summary)
+
+    return {
+        "status": "approved",
+        "current_stage": "complete",
+        "messages": [AIMessage(content=summary)],
+    }
 
 
 def handle_rejection(state: ApprovalState) -> dict:
     """
     Node 8: Handle a rejected request.
 
-    TODO (2 points):
     - Set status to "rejected"
     - Set current_stage to "complete"
     - Determine which stage rejected the request from the decisions list
@@ -212,22 +501,51 @@ def handle_rejection(state: ApprovalState) -> dict:
     - Add an AIMessage with the rejection details
     - Return updated state fields
     """
-    raise NotImplementedError("TODO: Implement handle_rejection node (2 points)")
+    summary = (
+        f"Request {state.get('request_id')} has been rejected.\n"
+        f"Request ID: {state.get('request_id')}\n"
+        f"Title: {state.get('title')}\n"
+        f"Amount: ${state.get('amount', 0):,.2f}\n"
+    )
+
+    # Find which stage rejected the request
+    for entry in state.get("decisions", []):
+        if not entry.get("approved"):
+            summary += (
+                f"Rejected by: {entry.get('reviewer')}\n"
+                f"Reason: {entry.get('comments', '')}"
+            )
+            break
+
+    summary = sanitize_output(summary)
+
+    return {
+        "status": "rejected",
+        "current_stage": "complete",
+        "messages": [AIMessage(content=summary)],
+    }
 
 
 # ============================================================
 # ROUTING FUNCTIONS (6 total — implement the escalation logic)
 # ============================================================
 
+
 def route_after_submission(state: ApprovalState) -> str:
     """
     Router: After submit_request, go to risk assessment or rejection.
 
-    TODO (1 point):
+
     - Return "assess_risk" if state["is_valid"] is True
     - Return "handle_rejection" otherwise
     """
-    raise NotImplementedError("TODO: Implement route_after_submission (1 point)")
+
+    # Route to risk assessment if valid, otherwise rejection.
+
+    if state["is_valid"]:
+        return "assess_risk"
+
+    return "handle_rejection"
 
 
 def route_after_risk(state: ApprovalState) -> str:
@@ -238,7 +556,6 @@ def route_after_risk(state: ApprovalState) -> str:
     human review and go directly to budget validation (auto-approve path).
     All other risk levels require manager review first.
 
-    TODO (1 point):
     - Return "validate_budget" if risk_level is "low"
     - Return "manager_review" for "medium", "high", or "critical"
 
@@ -246,7 +563,11 @@ def route_after_risk(state: ApprovalState) -> str:
     - state["risk_level"] contains the assessed risk level
     - Low risk = auto-approve path (no human review needed if within budget)
     """
-    raise NotImplementedError("TODO: Implement route_after_risk (1 point)")
+
+    if state["risk_level"] == "low":
+        return "validate_budget"
+
+    return "manager_review"
 
 
 def route_after_manager(state: ApprovalState) -> str:
@@ -259,7 +580,7 @@ def route_after_manager(state: ApprovalState) -> str:
     - Approved + medium risk → validate_budget
     - Approved + high/critical risk → finance_review
 
-    TODO (1 point):
+
     - Return "handle_rejection" if state["manager_approved"] is not True
     - Return "process_request" if risk_level is "low" (was escalated from over-budget)
     - Return "validate_budget" if risk_level is "medium"
@@ -271,7 +592,17 @@ def route_after_manager(state: ApprovalState) -> str:
     - Medium-risk requests need budget validation after manager approval.
     - High/critical-risk requests skip budget check and go to finance.
     """
-    raise NotImplementedError("TODO: Implement route_after_manager (1 point)")
+    if state["manager_approved"] is not True:
+        return "handle_rejection"
+
+    risk_level = state["risk_level"]
+
+    if risk_level == "low":
+        return "process_request"
+    elif risk_level == "medium":
+        return "validate_budget"
+    else:
+        return "finance_review"
 
 
 def route_after_budget(state: ApprovalState) -> str:
@@ -281,7 +612,7 @@ def route_after_budget(state: ApprovalState) -> str:
     Within-budget requests proceed to processing (auto-approved).
     Over-budget requests escalate to the next human reviewer.
 
-    TODO (1 point):
+
     - Return "process_request" if state["within_budget"] is True
     - If over budget:
       - Return "manager_review" if risk_level is "low" (needs human review)
@@ -292,7 +623,13 @@ def route_after_budget(state: ApprovalState) -> str:
     - Medium-risk over-budget: manager already approved → escalate to finance
     - High/critical-risk requests don't go through this router (they skip budget check)
     """
-    raise NotImplementedError("TODO: Implement route_after_budget (1 point)")
+    if state["within_budget"]:
+        return "process_request"
+
+    if state["risk_level"] == "low":
+        return "manager_review"
+
+    return "finance_review"
 
 
 def route_after_finance(state: ApprovalState) -> str:
@@ -304,20 +641,30 @@ def route_after_finance(state: ApprovalState) -> str:
     - Approved + critical risk → final_signoff (one more review)
     - Approved + any other risk → process_request (done)
 
-    TODO (1 point):
+
     - Return "handle_rejection" if state["finance_approved"] is not True
     - Return "final_signoff" if risk_level is "critical"
     - Return "process_request" otherwise
     """
-    raise NotImplementedError("TODO: Implement route_after_finance (1 point)")
+    if state["finance_approved"] is not True:
+        return "handle_rejection"
+
+    if state["risk_level"] == "critical":
+        return "final_signoff"
+
+    return "process_request"
 
 
 def route_after_final(state: ApprovalState) -> str:
     """
     Router: After final_signoff, go to processing or rejection.
 
-    TODO (1 point):
+
     - Return "process_request" if state["final_approved"] is True
     - Return "handle_rejection" otherwise
     """
-    raise NotImplementedError("TODO: Implement route_after_final (1 point)")
+
+    if state["final_approved"] is True:
+        return "process_request"
+
+    return "handle_rejection"

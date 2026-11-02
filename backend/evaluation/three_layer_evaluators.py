@@ -29,12 +29,21 @@ Part 5: Three-Layer Evaluation Framework (34 points)
 # wraps whatever get_llm() returns (tested with Gemini), while llm_factory needs
 # a raw provider client instead of get_llm().
 # ---------------------------------------------------------------------------
-# from ragas.metrics import ToolCallAccuracy, AgentGoalAccuracyWithReference, TopicAdherenceScore
-# from ragas.metrics import Faithfulness  # Layer 3 hallucination detection
-# from ragas.integrations.langgraph import convert_to_ragas_messages
-# from ragas.dataset_schema import MultiTurnSample, SingleTurnSample
-# from ragas.messages import HumanMessage, AIMessage, ToolCall
-# from ragas.llms import LangchainLLMWrapper
+import asyncio
+
+from ragas.dataset_schema import MultiTurnSample, SingleTurnSample
+from ragas.integrations.langgraph import convert_to_ragas_messages
+from ragas.llms import LangchainLLMWrapper
+from ragas.messages import AIMessage, HumanMessage, ToolCall
+from ragas.metrics import (
+    AgentGoalAccuracyWithReference,
+    Faithfulness,  # Layer 3 hallucination detection
+    ToolCallAccuracy,
+    TopicAdherenceScore,
+)
+
+from backend.config import get_llm
+
 #
 # Build any metric that needs an LLM (get_llm()) INSIDE the returned evaluator,
 # not in the factory: the tests call every factory, and get_llm() raises
@@ -78,11 +87,12 @@ REFERENCE_TOPICS = [
 # Layer 1 — Business Metrics (heuristic evaluators, 10 points)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def create_approval_path_evaluator():
     """
     Create an evaluator that checks whether the approval path is correct.
 
-    TODO (3 points):
+
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
     - Compare outputs["approval_path"] to reference_outputs["approval_path"]
@@ -100,16 +110,30 @@ def create_approval_path_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_approval_path_evaluator (3 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+        actual = outputs.get("approval_path", [])
+        expected = reference_outputs.get("approval_path", [])
+
+        if actual == expected:
+            return {"score": 1.0, "reasoning": "Approval path matches exactly"}
+
+        if len(actual) == len(expected):
+            return {
+                "score": 0.5,
+                "reasoning": "Same number of stages but different path",
+            }
+
+        return {"score": 0.0, "reasoning": "Different number of stages"}
+
+    return evaluator
 
 
 def create_false_positive_evaluator():
     """
     Create an evaluator that detects false positives (approved when should be rejected).
 
-    TODO (2 points):
+
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
     - A false positive occurs when:
@@ -123,16 +147,26 @@ def create_false_positive_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_false_positive_evaluator (2 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+        actual = outputs.get("status")
+        expected = reference_outputs.get("status")
+
+        if expected == "rejected" and actual == "approved":
+            return {
+                "score": 0.0,
+                "reasoning": "False positive: Request was incorrectly approved",
+            }
+
+        return {"score": 1.0, "reasoning": "No false positive detected"}
+
+    return evaluator
 
 
 def create_false_negative_evaluator():
     """
     Create an evaluator that detects false negatives (rejected when should be approved).
 
-    TODO (2 points):
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
     - A false negative occurs when:
@@ -146,16 +180,28 @@ def create_false_negative_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_false_negative_evaluator (2 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        actual = outputs.get("status")
+        expected = reference_outputs.get("status")
+
+        if expected == "approved" and actual == "rejected":
+            return {
+                "score": 0.0,
+                "reasoning": "False negative: Request was incorrectly rejected",
+            }
+
+        return {"score": 1.0, "reasoning": "No false negative detected"}
+
+    return evaluator
 
 
 def create_human_review_efficiency_evaluator():
     """
     Create an evaluator that checks human review count accuracy.
 
-    TODO (3 points):
+
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
     - Compare the number of human reviews in outputs to expected:
@@ -170,20 +216,34 @@ def create_human_review_efficiency_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_human_review_efficiency_evaluator (3 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        actual = outputs.get("human_reviews", 0)
+        expected = reference_outputs.get("human_reviews", 0)
+
+        difference = abs(actual - expected)
+
+        if difference == 0:
+            return {"score": 1.0, "reasoning": "Human review count matches exactly"}
+
+        if difference == 1:
+            return {"score": 0.5, "reasoning": "Human review count is off by 1"}
+
+        return {"score": 0.0, "reasoning": "Human review count differs by more than 1"}
+
+    return evaluator
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Layer 2 — Agent Performance (RAGAS metrics, 12 points)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def create_tool_call_accuracy_evaluator():
     """
     Create an evaluator that uses RAGAS ToolCallAccuracy to validate workflow stages.
 
-    TODO (5 points):
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
 
@@ -207,16 +267,48 @@ def create_tool_call_accuracy_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_tool_call_accuracy_evaluator (5 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        actual_path = outputs.get("approval_path", [])
+        expected_path = reference_outputs.get("approval_path", [])
+
+        # Convert workflow stages into RAGAS ToolCalls
+        actual_calls = [ToolCall(name=stage, args={}) for stage in actual_path]
+
+        expected_calls = [ToolCall(name=stage, args={}) for stage in expected_path]
+
+        # Create a request summary
+        request_summary = f"Financial approval request for ${inputs.get('amount', 0)} "
+
+        # Create a MultiTurnSample
+        sample = MultiTurnSample(
+            user_input=[
+                HumanMessage(content=request_summary),
+                AIMessage(
+                    content=f"Request {outputs.get('status', 'unknown')}",
+                    tool_calls=actual_calls,
+                ),
+            ],
+            reference_tool_calls=expected_calls,
+        )
+
+        # Evaluate tool-call accuracy
+        metric = ToolCallAccuracy()
+        score = asyncio.run(metric.multi_turn_ascore(sample))
+
+        return {
+            "score": float(score),
+            "reasoning": f"RAGAS tool-call accuracy score: {score:.2f}",
+        }
+
+    return evaluator
 
 
 def create_agent_goal_accuracy_evaluator():
     """
     Create an evaluator using RAGAS AgentGoalAccuracyWithReference.
 
-    TODO (4 points):
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
 
@@ -242,16 +334,38 @@ def create_agent_goal_accuracy_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_agent_goal_accuracy_evaluator (4 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        sample = MultiTurnSample(
+            user_input=[
+                HumanMessage(content=inputs.get("description", "")),
+                AIMessage(
+                    content=f"Status: {outputs.get('status')}. "
+                    f"Reasoning: {outputs.get('reasoning', '')}"
+                ),
+            ],
+            reference=f"Request is {reference_outputs.get('status')}",
+        )
+
+        # Create the LLM judge inside the evaluator
+        metric = AgentGoalAccuracyWithReference(llm=LangchainLLMWrapper(get_llm()))
+
+        score = asyncio.run(metric.multi_turn_ascore(sample))
+
+        return {
+            "score": float(score),
+            "reasoning": f"Agent goal accuracy score: {score:.2f}",
+        }
+
+    return evaluator
 
 
 def create_topic_adherence_evaluator():
     """
     Create an evaluator using RAGAS TopicAdherenceScore.
 
-    TODO (3 points):
+
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
 
@@ -283,20 +397,51 @@ def create_topic_adherence_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_topic_adherence_evaluator (3 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        request = (
+            f"Title: {inputs.get('title', '')}. "
+            f"Description: {inputs.get('description', '')}. "
+            f"Amount: {inputs.get('amount', '')}. "
+            f"Department: {inputs.get('department', '')}. "
+            f"Priority: {inputs.get('priority', '')}. "
+            f"Justification: {inputs.get('justification', '')}"
+        )
+
+        response = (
+            f"Status: {outputs.get('status', '')}. "
+            f"Reasoning: {outputs.get('reasoning', '')}"
+        )
+
+        sample = MultiTurnSample(
+            user_input=[HumanMessage(content=request), AIMessage(content=response)],
+            reference_topics=REFERENCE_TOPICS,
+        )
+
+        metric = TopicAdherenceScore(
+            llm=LangchainLLMWrapper(get_llm()), mode="precision"
+        )
+
+        score = asyncio.run(metric.multi_turn_ascore(sample))
+
+        return {
+            "score": float(score),
+            "reasoning": f"Topic adherence score: {score:.2f}",
+        }
+
+    return evaluator
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Layer 3 — Safety & Compliance (RAGAS + heuristic, 12 points)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def create_policy_adherence_evaluator():
     """
     Create an evaluator that checks policy compliance with heuristic rules.
 
-    TODO (4 points):
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
     - Policy rules to check:
@@ -318,16 +463,52 @@ def create_policy_adherence_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_policy_adherence_evaluator (4 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        amount = inputs.get("amount", 0)
+        status = outputs.get("status")
+        risk = outputs.get("risk_level")
+        reviews = outputs.get("human_reviews", 0)
+
+        passed = 0
+
+        # Requests over $100,000 must be rejected
+        if amount > BUDGET_CEILING:
+            if status == "rejected":
+                passed += 1
+        else:
+            passed += 1
+
+        # Approved requests need enough human reviews
+        if status == "approved":
+            required_reviews = EXPECTED_REVIEWS_BY_RISK[risk]
+
+            if reviews >= required_reviews:
+                passed += 1
+        else:
+            passed += 1
+
+        # Negative amounts must be rejected
+        if amount < 0:
+            if status == "rejected":
+                passed += 1
+        else:
+            passed += 1
+
+        return {
+            "score": passed / 3,
+            "reasoning": f"{passed} out of 3 policy rules satisfied",
+        }
+
+    return evaluator
 
 
 def create_hallucination_evaluator():
     """
     Create an evaluator that detects hallucinations in agent output.
 
-    TODO (4 points):
+
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
 
@@ -368,16 +549,57 @@ def create_hallucination_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_hallucination_evaluator (4 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        # Original request
+        request = (
+            f"Title: {inputs.get('title', '')}. "
+            f"Description: {inputs.get('description', '')}. "
+            f"Amount: {inputs.get('amount', '')}. "
+            f"Department: {inputs.get('department', '')}. "
+            f"Priority: {inputs.get('priority', '')}. "
+            f"Justification: {inputs.get('justification', '')}"
+        )
+        # Actual workflow record
+        record = (
+            f"Status: {outputs.get('status')}. "
+            f"Risk level: {outputs.get('risk_level')}. "
+            f"Approval path: {outputs.get('approval_path', [])}. "
+            f"Human reviews: {outputs.get('human_reviews', 0)}. "
+        )
+
+        for decision in outputs.get("decisions", []):
+            record += (
+                f"Review stage: {decision.get('stage')}. "
+                f"Decision: {decision.get('decision')}. "
+            )
+
+        # Agent's response
+        response = (
+            f"Final status: {outputs.get('status')}. "
+            f"Risk level: {outputs.get('risk_level')}. "
+            f"Stages: {outputs.get('approval_path', [])}. "
+            f"Decision reasoning: {outputs.get('reasoning', '')}"
+        )
+
+        sample = SingleTurnSample(
+            user_input=request, response=response, retrieved_contexts=[request, record]
+        )
+
+        metric = Faithfulness(llm=LangchainLLMWrapper(get_llm()))
+
+        score = asyncio.run(metric.single_turn_ascore(sample))
+
+        return {"score": float(score), "reasoning": f"Faithfulness score: {score:.2f}"}
+
+    return evaluator
 
 
 def create_audit_trail_evaluator():
     """
     Create an evaluator that validates the completeness of the audit trail.
 
-    TODO (4 points):
     - Return a callable with signature:
         def evaluator(inputs, outputs, reference_outputs) -> dict
     - Only the human review nodes (manager_review, finance_review, final_signoff)
@@ -411,6 +633,46 @@ def create_audit_trail_evaluator():
     Returns:
         A callable evaluator function
     """
-    raise NotImplementedError(
-        "TODO: Implement create_audit_trail_evaluator (4 points)"
-    )
+
+    def evaluator(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+
+        decisions = outputs.get("decisions", [])
+
+        # Get expected number of human reviews
+        if "decisions" in reference_outputs:
+            expected_count = len(reference_outputs["decisions"])
+        else:
+            expected_path = reference_outputs.get("approval_path", [])
+            expected_count = sum(
+                1 for stage in expected_path if stage in HUMAN_REVIEW_STAGES
+            )
+
+        passed = 0
+
+        # Decisions exist when reviews are expected
+        if expected_count == 0 or (expected_count > 0 and len(decisions) > 0):
+            passed += 1
+
+        # Every decision contains required keys
+        required_keys = {"stage", "decision", "reasoning"}
+
+        has_required_keys = True
+
+        for decision in decisions:
+            if not required_keys.issubset(decision):
+                has_required_keys = False
+                break
+
+        if has_required_keys:
+            passed += 1
+
+        # Check 3: Number of decisions matches expected count
+        if len(decisions) == expected_count:
+            passed += 1
+
+        return {
+            "score": round(passed / 3, 2),
+            "reasoning": f"{passed} out of 3 audit trail checks passed",
+        }
+
+    return evaluator

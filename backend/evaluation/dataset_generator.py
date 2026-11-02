@@ -12,6 +12,10 @@ Part 5: Dataset Generation (16 points)
 
 import json
 
+import langsmith
+
+from backend import config
+
 # ---------------------------------------------------------------------------
 # Constants (GIVEN — do not modify)
 # ---------------------------------------------------------------------------
@@ -41,7 +45,7 @@ DATASET_SCHEMA = {
     },
     "expected": {
         "risk_level": "str or None: one of low, medium, high, critical; None (JSON null) "
-                      "when the request is rejected at submit_request, because assess_risk never runs",
+        "when the request is rejected at submit_request, because assess_risk never runs",
         "status": "str — one of: approved, rejected",
         "approval_path": "list[str] — ordered list of workflow stages",
         "human_reviews": "int — number of human review interrupts expected",
@@ -86,7 +90,8 @@ Example of one test case:
 Return ONLY a JSON array of test case objects. No markdown, no explanation.
 """
 
-GENERATION_PROMPT = """You are a test case generator for a Financial Approval System.
+GENERATION_PROMPT = (
+    """You are a test case generator for a Financial Approval System.
 
 Generate {num_cases} diverse test cases for evaluating the system. Each test case
 should be a JSON object with "input" and "expected" fields.
@@ -118,9 +123,12 @@ Valid priorities: low, normal, high, urgent
 
 Generate realistic financial requests covering different departments, amounts,
 and risk levels. Include a mix of approved and rejected cases.
-""" + OUTPUT_FORMAT
+"""
+    + OUTPUT_FORMAT
+)
 
-EDGE_CASE_PROMPT = """You are a test case generator for a Financial Approval System.
+EDGE_CASE_PROMPT = (
+    """You are a test case generator for a Financial Approval System.
 Generate {num_cases} EDGE CASES and ADVERSARIAL scenarios.
 
 Focus on boundary conditions and tricky scenarios:
@@ -150,18 +158,21 @@ Business Rules:
 
 Valid departments: {departments}
 Use only these departments: an invalid department fails validate_generated_dataset.
-""" + OUTPUT_FORMAT
+"""
+    + OUTPUT_FORMAT
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Student TODO — Dataset Generation Functions (16 points)
+# Dataset Generation Functions (16 points)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def generate_eval_dataset(num_cases=10, llm=None):
     """
     Generate diverse evaluation test cases using an LLM.
 
-    TODO (4 points):
+
     - If llm is None, create one using: from backend.config import get_llm
     - Format GENERATION_PROMPT with num_cases and VALID_DEPARTMENTS
     - Invoke the LLM with the formatted prompt: response = llm.invoke(prompt)
@@ -183,16 +194,43 @@ def generate_eval_dataset(num_cases=10, llm=None):
         dataset = generate_eval_dataset(num_cases=5)
         # Returns: [{"input": {...}, "expected": {...}}, ...]
     """
-    raise NotImplementedError(
-        "TODO: Implement generate_eval_dataset (4 points)"
+    # Create LLM if one wasn't provided
+    if llm is None:
+        from backend.config import get_llm
+
+        llm = get_llm()
+
+    # Prepare the prompt
+    prompt = GENERATION_PROMPT.format(
+        num_cases=num_cases, valid_departments=VALID_DEPARTMENTS
     )
+
+    # Ask LLM to generate test cases
+    response = llm.invoke(prompt)
+
+    # Get JSON text
+    text = response.text.strip()
+
+    # Remove JSON code fences
+    text = text.removeprefix("```json").removeprefix("```")
+    text = text.removesuffix("```").strip()
+
+    # Convert JSON text into Python objects
+    dataset = json.loads(text)
+
+    is_valid, errors = validate_generated_dataset(dataset)
+
+    if not is_valid:
+        raise ValueError(f"Invalid generated dataset: {errors}")
+
+    return dataset
 
 
 def generate_edge_cases(num_cases=5, llm=None):
     """
     Generate boundary and adversarial test cases using an LLM.
 
-    TODO (4 points):
+
     - If llm is None, create one using: from backend.config import get_llm
     - Format EDGE_CASE_PROMPT with num_cases and VALID_DEPARTMENTS
     - Invoke the LLM with the formatted prompt: response = llm.invoke(prompt)
@@ -210,16 +248,34 @@ def generate_edge_cases(num_cases=5, llm=None):
     Returns:
         list[dict]: Generated edge cases matching DATASET_SCHEMA
     """
-    raise NotImplementedError(
-        "TODO: Implement generate_edge_cases (4 points)"
+    if llm is None:
+        from backend.config import get_llm
+
+        llm = get_llm()
+
+    # Prepare the edge-case prompt
+    prompt = EDGE_CASE_PROMPT.format(
+        num_cases=num_cases, valid_departments=VALID_DEPARTMENTS
     )
+
+    # Generate edge cases
+    response = llm.invoke(prompt)
+
+    # Remove JSON code fences if present
+    text = response.text.strip()
+    text = text.removeprefix("```json").removeprefix("```")
+    text = text.removesuffix("```").strip()
+
+    # Convert JSON into a Python list
+    dataset = json.loads(text)
+
+    return dataset
 
 
 def upload_to_langsmith(dataset, dataset_name="financial-approval-eval"):
     """
     Upload a dataset to LangSmith for evaluation runs.
 
-    TODO (4 points):
     - Import langsmith and create a Client: client = langsmith.Client()
       (it reads LANGSMITH_API_KEY from the environment. Importing backend.config
       loads .env; if nothing has loaded it, the client sends no key and
@@ -244,16 +300,28 @@ def upload_to_langsmith(dataset, dataset_name="financial-approval-eval"):
     Raises:
         ValueError: If dataset is empty
     """
-    raise NotImplementedError(
-        "TODO: Implement upload_to_langsmith (4 points)"
-    )
+    if not dataset:
+        raise ValueError("Dataset cannot be empty")
+
+    client = langsmith.Client()
+
+    # Create a dataset in LangSmith
+    ls_dataset = client.create_dataset(dataset_name=dataset_name)
+
+    # Upload each test case
+    for case in dataset:
+        client.create_example(
+            inputs=case["input"], outputs=case["expected"], dataset_id=ls_dataset.id
+        )
+
+    return str(ls_dataset.id)
 
 
 def validate_generated_dataset(dataset):
     """
     Validate that a generated dataset conforms to the expected schema.
 
-    TODO (4 points):
+
     - Check the following and collect error messages for failures:
       1. dataset is a non-empty list
       2. Each entry has "input" and "expected" top-level keys
@@ -282,6 +350,84 @@ def validate_generated_dataset(dataset):
         valid, errors = validate_generated_dataset([{"input": {}, "expected": {}}])
         # valid = False, errors = ["Case 1: input missing 'request_id'", ...]
     """
-    raise NotImplementedError(
-        "TODO: Implement validate_generated_dataset (4 points)"
-    )
+    errors = []
+
+    # 1. Dataset must be a non-empty list
+    if not isinstance(dataset, list) or len(dataset) == 0:
+        return False, ["Dataset must be a non-empty list"]
+
+    input_fields = [
+        "request_id",
+        "title",
+        "description",
+        "amount",
+        "department",
+        "requester",
+        "justification",
+        "priority",
+    ]
+
+    expected_fields = ["risk_level", "status", "approval_path", "human_reviews"]
+
+    valid_risks = ["low", "medium", "high", "critical"]
+
+    for index, case in enumerate(dataset, start=1):
+        # 2. Check top-level keys
+        if not isinstance(case, dict):
+            errors.append(f"Case {index}: Must be a dictionary")
+            continue
+
+        if "input" not in case or "expected" not in case:
+            errors.append(f"Case {index}: Missing input or expected")
+            continue
+
+        inputs = case["input"]
+        expected = case["expected"]
+
+        if not isinstance(inputs, dict) or not isinstance(expected, dict):
+            errors.append(f"Case {index}: input and expected must be dictionaries")
+            continue
+
+        # 3. Check required input fields
+        for field in input_fields:
+            if field not in inputs:
+                errors.append(f"Case {index}: input missing '{field}'")
+
+        # 4. Check required expected fields
+        for field in expected_fields:
+            if field not in expected:
+                errors.append(f"Case {index}: expected missing '{field}'")
+
+        # 5. Check amount
+        if not isinstance(inputs.get("amount"), (int, float)):
+            errors.append(f"Case {index}: amount must be a number")
+
+        # 6. Check department
+        if inputs.get("department") not in VALID_DEPARTMENTS:
+            errors.append(f"Case {index}: invalid department")
+
+        # 7. Check risk level
+        risk = expected.get("risk_level")
+        path = expected.get("approval_path", [])
+
+        if risk not in valid_risks:
+            if not (
+                risk is None and isinstance(path, list) and "assess_risk" not in path
+            ):
+                errors.append(f"Case {index}: invalid risk level")
+
+        # 8. Check status
+        if expected.get("status") not in ["approved", "rejected"]:
+            errors.append(f"Case {index}: invalid status")
+
+        # 9. Check approval path
+        if not isinstance(path, list):
+            errors.append(f"Case {index}: approval_path must be a list")
+
+        # 10. Check human reviews
+        reviews = expected.get("human_reviews")
+
+        if not isinstance(reviews, int) or isinstance(reviews, bool) or reviews < 0:
+            errors.append(f"Case {index}: human_reviews must be a non-negative integer")
+
+    return len(errors) == 0, errors
